@@ -152,25 +152,50 @@ terminal. Edits hot-reload without re-scanning.
 | Swipe up / down | step through notifications |
 | Double-tap | exit, with the system confirmation dialog (mode 1 — required on a root page) |
 
-The feed is polled every 20 s, and a newly-arrived notification jumps to the front
-of the view automatically.
+The feed is polled every 60 s — GitHub's CDN holds the file for `max-age=300`, so
+polling faster cannot surface an update any sooner. A newly-arrived notification
+jumps to the front of the view automatically.
 
-## Remote feed mode
+## How the feed reaches the glasses
 
-By default the app fetches `/feed.json` from its own origin — no network permission
-needed, and it works with no connectivity.
+Hermes publishes the feed; the glasses pull it.
 
-To pull from a server you control, pass `?feed=<url>` and make **both** true, or the
-request never leaves the WebView:
+```
+tools/feeds/*.py ──► public/feed.json ──tools/publish.py──► commit + push
+                                                                  │
+                  https://raw.githubusercontent.com/…/feed.json ◄──┘
+                                    │  60 s poll
+                                    ▼
+                              G2Hermes plugin
+```
 
-1. The origin is in `app.json` → `permissions[0].whitelist`. The shipped placeholder
-   is `http://192.168.1.100:8787`; replace it with yours. `https://` in production;
-   `http://` is for a LAN dev server only.
-2. That server returns `Access-Control-Allow-Origin` (and handles the `OPTIONS`
-   preflight for JSON bodies).
+`tools/publish.py` regenerates the feeds, commits and pushes, and skips the commit
+when nothing changed. Run it by hand or let the scheduled job do it.
 
-The whitelist is **not** a CORS bypass — two independent gates. A request that works
-in `curl` but fails here is almost always missing CORS headers server-side.
+**Why a commit instead of a server.** Both of these must hold for the fetch to work,
+and the second rules out anything dynamic:
+
+1. The origin is in `app.json` → `permissions[0].whitelist`. That takes **full origins
+   only — no bare hostnames, no wildcards** — and it is baked into the `.ehpk`, so the
+   hostname can never change without repacking and re-installing the app.
+2. The server returns `Access-Control-Allow-Origin`. The whitelist is **not** a CORS
+   bypass — two independent gates.
+
+So a tunnel (cloudflared, ngrok, serveo) is the wrong tool here: it mints a fresh
+hostname on every restart, and `*.trycloudflare.com` cannot be whitelisted as a
+wildcard. `raw.githubusercontent.com` is a fixed origin that returns
+`access-control-allow-origin: *`, and needs no account, no daemon and no inbound port.
+
+**Freshness: up to ~5 minutes.** GitHub serves the file with `cache-control: max-age=300`
+and the query string is *not* part of its cache key — a `?t=` cache-buster still returns
+`x-cache: HIT`, verified. Nothing can make an update appear sooner than that TTL.
+
+**Cost.** One odds refresh is one API credit (`x-requests-last=1`). Injuries and weather
+are free, so `mlb.py` caches the paid slate for 6 hours (`--odds-ttl`) and refreshes only
+the free parts on the runs in between.
+
+To point the app at some other feed, pass `?feed=<url>`; it takes priority over the
+published URL and the bundled copy, and still has to clear both gates above.
 
 ## Design constraints this app respects
 

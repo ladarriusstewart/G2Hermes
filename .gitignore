@@ -10,3 +10,6 @@ npm-debug.log*
 .DS_Store
 .vite/
 *.local
+
+# Paid slate reused between runs so an intraday refresh does not re-buy the odds.
+.cache/

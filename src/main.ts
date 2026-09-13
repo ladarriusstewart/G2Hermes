@@ -14,14 +14,38 @@ import {
  * owns one category and replaces it wholesale. The app renders whatever is in
  * the list, newest first, so adding a feed needs no app change.
  *
- * Feed resolution:
- *   1. ?feed=<url> query param (must be whitelisted in app.json for remote origins)
- *   2. /feed.json — same-origin static file served alongside the app
+ * Feed resolution — tried in order, first success wins:
+ *   1. ?feed=<url> query param (must be in app.json's network whitelist)
+ *   2. the published feed (REMOTE_FEED) — what Hermes actually serves
+ *   3. /feed.json — the copy bundled in this package, a frozen snapshot from
+ *      build time. Only useful as a fallback, never as the live source.
  */
 
 const READY_MARKER = '[g2hermes] ready'
+
+/**
+ * Where Hermes publishes the feed. This origin is fixed and returns
+ * `access-control-allow-origin: *`.
+ *
+ * Both properties are required, not cosmetic. app.json's network whitelist takes
+ * full origins only — no bare hostnames, no wildcards — so the hostname can never
+ * change. A tunnel (cloudflared, ngrok, serveo) hands out a fresh hostname on every
+ * restart, which would mean repacking the app and re-installing it on the glasses
+ * each time. A raw GitHub path is stable forever, so the feed's transport is a
+ * commit rather than a server.
+ */
+const REMOTE_FEED =
+  'https://raw.githubusercontent.com/ladarriusstewart/G2Hermes/main/public/feed.json'
 const LOCAL_FEED = '/feed.json'
-const POLL_MS = 20_000
+
+/**
+ * GitHub's CDN holds the feed for max-age=300 and the query string is not part of
+ * its cache key, so a cache-buster does nothing — polling faster than the cache
+ * cannot make updates appear sooner. 60 s bounds the extra lag at a minute without
+ * pointless traffic. (The WebView may also be frozen while backgrounded; the poll
+ * is best-effort.)
+ */
+const POLL_MS = 60_000
 const CONTAINER_TITLE = 1
 const CONTAINER_BODY = 2
 const TITLE_MAX = 16
@@ -35,7 +59,7 @@ type Notification = {
   ts?: string
   source?: string
 }
-type Feed = { feed: string; version: number; notifications: Notification[] }
+type Feed = { feed: string; version: number; updated?: string; notifications: Notification[] }
 
 const FALLBACK: Feed = {
   feed: 'g2hermes',
@@ -46,9 +70,12 @@ const FALLBACK: Feed = {
   }],
 }
 
-function feedUrl(): string {
+function feedSources(): string[] {
   const q = new URLSearchParams(location.search).get('feed')
-  return q && /^https?:\/\//i.test(q) ? q : LOCAL_FEED
+  const out: string[] = []
+  if (q && /^https?:\/\//i.test(q)) out.push(q)
+  out.push(REMOTE_FEED, LOCAL_FEED)
+  return out
 }
 
 function ageOf(ts?: string): string {
@@ -121,9 +148,12 @@ function render(): void {
 
   upgrade(CONTAINER_TITLE, 'title', `G2HERMES · ${n.category}`.slice(0, TITLE_MAX))
 
+  // The feed's own publish time is shown alongside the notification's age: with a
+  // cached CDN copy in the path, "how stale is my data" is the question a glance
+  // should answer.
   const meta = [
-    n.category,
     ageOf(n.ts),
+    feed.updated ? `feed ${ageOf(feed.updated)}` : null,
     `${index + 1}/${list.length}`,
     n.priority && n.priority >= 2 ? `p${n.priority}` : null,
   ].filter(Boolean).join('  ·  ')
@@ -133,18 +163,25 @@ function render(): void {
 }
 
 async function loadFeed(reason: string): Promise<void> {
-  try {
-    const res = await fetch(feedUrl(), { cache: 'no-store' })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const data = (await res.json()) as Feed
-    if (!Array.isArray(data?.notifications)) throw new Error('feed has no notifications array')
-    const prevNewest = feed.notifications[0]?.id
-    feed = data
-    if (data.notifications[0]?.id !== prevNewest) index = 0  // new arrival -> jump to it
-    console.log(`${READY_MARKER} feed loaded (${reason}) — ${data.notifications.length} notification(s)`)
-  } catch (err) {
-    console.error(`${READY_MARKER} feed fetch failed (${reason}):`, err)
+  const sources = feedSources()
+  for (const url of sources) {
+    try {
+      const res = await fetch(url, { cache: 'no-store' })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = (await res.json()) as Feed
+      if (!Array.isArray(data?.notifications)) throw new Error('feed has no notifications array')
+      const prevNewest = feed.notifications[0]?.id
+      feed = data
+      if (data.notifications[0]?.id !== prevNewest) index = 0  // new arrival -> jump to it
+      console.log(`${READY_MARKER} feed loaded (${reason}) from ${url} — ${data.notifications.length} notification(s)`)
+      render()
+      return
+    } catch (err) {
+      // Keep the last good feed on screen and fall through to the next source.
+      console.warn(`${READY_MARKER} source failed (${reason}): ${url}`, err)
+    }
   }
+  console.error(`${READY_MARKER} every feed source failed (${reason})`)
   render()
 }
 

@@ -8,9 +8,9 @@
   "permissions": [
     {
       "name": "network",
-      "desc": "Fetches the notification feed so updates pushed by Hermes appear on the glasses.",
+      "desc": "Fetches the notification feed Hermes publishes, so new notifications appear on the glasses without rebuilding the app.",
       "whitelist": [
-        "http://192.168.1.100:8787"
+        "https://raw.githubusercontent.com"
       ]
     }
   ],
