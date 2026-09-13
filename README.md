@@ -1,201 +1,100 @@
 # G2Hermes
 
-Notifications from Hermes, rendered on the Even Realities G2 glasses.
+A notification feed for the **Even Realities G2**. Something on your network writes
+notifications; the glasses render them.
+
+This app ships with **no server, no credentials and no feed**. You point it at your
+own endpoint.
 
 ```
-feed generator (tools/feeds/*.py)  ──►  public/feed.json  ──fetch──►  G2Hermes plugin
-        one per category                                                   │
-                                                                           ▼
-                                                                     G2 display
+your endpoint  ──►  feed.json  ──fetch──►  G2Hermes plugin  ──►  G2 display
 ```
 
-G2Hermes is a **notification feed**, not a message list. Every notification carries a
-category, and each generator owns exactly one category and replaces it wholesale.
-That is the whole extension model: adding a feed means adding a generator — the
-app itself never changes.
+## What it is
 
-| Category | Generator | What it pushes |
-|---|---|---|
-| `mlb` | `tools/feeds/mlb.py` | moneyline predictions for today's games |
-| `system` | `tools/notify.py` | manual / heartbeat notifications |
+A notification feed, not a message list. Every notification carries a category, and
+each producer owns exactly one category and replaces it wholesale — so adding a new
+kind of notification means adding a producer, and the app itself never changes. It is
+a generic renderer: it does not know or care what the notifications are about.
 
-## Layout
+## Requirements
 
-| Path | Purpose |
-|---|---|
-| `src/main.ts` | the plugin — page, render, input routing |
-| `app.json` | Even Hub manifest (`com.hermes.g2hermes`) |
-| `public/feed.json` | the feed the glasses read |
-| `tools/notify.py` | notification store — the single writer, importable or CLI |
-| `tools/feeds/mlb.py` | MLB moneyline feed |
-| `test/stub-sdk.ts` | faithful offline stand-in for the SDK (test only) |
-| `test/harness.mjs` | 24 offline assertions |
+- Even Realities App **2.2.10+** (`min_app_version`, derived from SDK 0.0.15)
+- Node.js ≥ 20 to build
+- An HTTP endpoint you control that serves the feed with CORS headers
 
-`test/` never ships — only `dist/` is packed, and the stub is a build-time alias
-that appears nowhere in the real bundle.
+## Configure it
 
-## Pushing a notification
+**1. Whitelist your origin.** In `app.json`, replace the placeholder:
 
-```bash
-python3 tools/notify.py --category system --title "Hello World" --body "..." --priority 2
-python3 tools/notify.py --list
-python3 tools/notify.py --clear --category mlb
-python3 tools/notify.py --push http://192.168.1.100:8787/notify --category system --title "..."
+```json
+"permissions": [
+  { "name": "network",
+    "desc": "Fetches the notification feed from the endpoint you configure.",
+    "whitelist": ["https://your-endpoint.example.com"] }
+]
 ```
 
-## The MLB moneyline feed
+This list is enforced by the Even Realities App *before* the request leaves the
+WebView. Two things to know, both of which shape the design:
 
-```bash
-python3 tools/feeds/mlb.py              # write today's slate into the feed
-python3 tools/feeds/mlb.py --dry-run    # print it, write nothing
-python3 tools/feeds/mlb.py --no-weather # skip park wind lookups
+- It takes **full origins only — no bare hostnames, no wildcards.**
+- It is compiled into the `.ehpk`, so changing it means **rebuilding and reinstalling**.
+
+**2. Set the endpoint.** Either set `ENDPOINT` in `src/main.ts` before building, or
+store it at runtime as `g2hermes.endpoint` in `localStorage`.
+
+Runtime is the interesting case: the SDK bridge exposes **no keyboard, no file system
+and no clipboard**, so there is no way to type a URL on the device. The practical
+runtime path is a **setup QR code** read with `captureImageFromCamera()` (the `camera`
+permission), which hands the URL to `localStorage.setItem()`. A stored
+`g2hermes.token` is sent as `Authorization: Bearer …` — a custom header, so your
+server must answer the `OPTIONS` preflight as well.
+
+**3. Your server must send CORS headers.** The whitelist is **not** a CORS bypass —
+they are two independent gates. At minimum:
+
+```
+Access-Control-Allow-Origin: *
 ```
 
-One notification per game, ordered by the model's disagreement with the market,
-plus a summary at the front. Each carries the two-way fair line, the market price
-on both sides with the bookmaker offering it, the pitcher tilt, and a value
-read against the price you'd actually get.
+## Resolution order
 
-### The model
+First success wins; a failure falls through and the last good feed stays on screen:
 
-```
-p_model(home) = clamp( p_market(home) + pitcher_tilt , 0.05 , 0.95 )
-pitcher_tilt  = clamp((ERA_away − ERA_home) × 0.030, −0.080, +0.080)
-```
+1. `?feed=<url>` — manual override
+2. `localStorage` `g2hermes.endpoint`
+3. `ENDPOINT` in `src/main.ts`
+4. `/feed.json` — an optional snapshot shipped alongside the app
 
-The starting point is the de-vigged market consensus, because the market already
-prices team strength, home field, bullpens, lineups and rest. The script's only
-contribution is a transparent re-weighting on the two announced starters.
+## Feed format
 
-**This is a re-derivation, not claimed alpha.** `0.030` and `0.080` are hand-set,
-not fitted against outcomes. Treat the output as a second opinion on the price.
-
-Reported per game:
-
-- **`model − market`** — how my view differs from the market's view (percentage points).
-- **value** — model probability minus the probability implied by the best *available*
-  price. This is the number that matters for whether a price is worth taking, and
-  it's different from `model − market` because the best price is better than consensus.
-
-Both can be **negative**, which is informative: Milwaukee at 59% against a market
-64% means the model thinks the favourite is overpriced, and the notification says
-so rather than dressing it up as a pick.
-
-### In the feed but not in the probability
-
-- **Injuries.** Pulled per game from **ESPN's injuries JSON API**
-  (`site.api.espn.com/apis/site/v2/sports/baseball/mlb/injuries`) and reported as
-  context beside the number — named players, their status, and a `+N more` count.
-  They are deliberately *not* folded into the tilt: "how many points is losing
-  player X worth" needs a fitted model, and a hand-waved constant would be worse
-  than none. Reporting them next to the number lets a human apply the judgement.
-
-  Note it uses the **JSON API, not the injuries web page**. `espn.com/mlb/injuries`
-  is client-rendered, so a plain fetch of that page returns the app shell with zero
-  injury content — the tables only exist after JS runs. The JSON endpoint carries the
-  same data *with* the team attribution the rendered page doesn't expose.
-
-  Long-term statuses (60-day IL) are excluded from the note; they aren't news for
-  today's game and they would bury the short-term absences that actually move a lineup.
-
-- **Wind.** A strong out-to-centre wind raises scoring for *both* teams, so it moves
-  the run environment, not the winner. It appears as context ("13 mph out to centre")
-  and never touches the tilt. Winds under 10 mph are reported as too light to matter
-  rather than being labelled by direction, which would imply an effect that isn't there.
-
-### Coming from outside
-
-- `references/parks.md` (in the `mlb-daily-briefing` skill) supplies park coordinates,
-  roof type and home-plate-to-centre-field bearings for the wind read.
-- The odds and schedule come from the `the-odds-api` skill's client via that skill's
-  `slate.py`.
-
-## Running it
-
-**Dev server + simulator** (layout and logic, no hardware):
-
-```bash
-npm install
-npm run dev            # terminal 1 — Vite on :5173
-npm run simulate       # terminal 2 — evenhub-simulator http://localhost:5173
+```json
+{
+  "feed": "g2hermes",
+  "version": 2,
+  "updated": "2026-01-01T12:00:00Z",
+  "notifications": [
+    { "id": 3, "category": "system", "title": "Short title",
+      "body": "Longer text.\nNewlines are preserved.", "priority": 2,
+      "ts": "2026-01-01T12:00:00Z", "source": "producer name" }
+  ]
+}
 ```
 
-Headless, for CI — the simulator exposes an HTTP control plane:
-
-```bash
-npm run simulate:headless          # adds --automation-port 9898
-curl http://127.0.0.1:9898/api/ping
-curl -o glasses.png http://127.0.0.1:9898/api/screenshot/glasses
-```
-
-`/api/screenshot/glasses` returns the 576×288 RGBA framebuffer. **Test lit pixels
-with `alpha > 0`** — background and text both render as pure green, so an RGB delta
-tells you nothing.
-
-**On real glasses** (QR sideload):
-
-```bash
-hostname -I | awk '{print $1}'
-npm run qr -- --url "http://<LAN-IP>:5173"
-```
-
-Tap **Scan QR** in the Even Realities App (Developer Mode on) and point it at the
-terminal. Edits hot-reload without re-scanning.
-
-**Private build:** `npm run pack` → `g2hermes.ehpk`, uploaded through the dev portal.
+- `notifications[0]` renders **first** and taps move toward the end of the array.
+- `priority` ≥ 2 is surfaced in the meta line.
+- `updated` is shown as the feed's own age, so a stale cached copy is visible.
 
 ## Controls
 
 | Input | Action |
 |---|---|
-| Tap | next notification; on the oldest, re-fetch the feed |
+| Tap | next notification (at the end: refresh) |
 | Swipe up / down | step through notifications |
 | Double-tap | exit, with the system confirmation dialog (mode 1 — required on a root page) |
 
-The feed is polled every 60 s — GitHub's CDN holds the file for `max-age=300`, so
-polling faster cannot surface an update any sooner. A newly-arrived notification
-jumps to the front of the view automatically.
-
-## How the feed reaches the glasses
-
-Hermes publishes the feed; the glasses pull it.
-
-```
-tools/feeds/*.py ──► public/feed.json ──tools/publish.py──► commit + push
-                                                                  │
-                  https://raw.githubusercontent.com/…/feed.json ◄──┘
-                                    │  60 s poll
-                                    ▼
-                              G2Hermes plugin
-```
-
-`tools/publish.py` regenerates the feeds, commits and pushes, and skips the commit
-when nothing changed. Run it by hand or let the scheduled job do it.
-
-**Why a commit instead of a server.** Both of these must hold for the fetch to work,
-and the second rules out anything dynamic:
-
-1. The origin is in `app.json` → `permissions[0].whitelist`. That takes **full origins
-   only — no bare hostnames, no wildcards** — and it is baked into the `.ehpk`, so the
-   hostname can never change without repacking and re-installing the app.
-2. The server returns `Access-Control-Allow-Origin`. The whitelist is **not** a CORS
-   bypass — two independent gates.
-
-So a tunnel (cloudflared, ngrok, serveo) is the wrong tool here: it mints a fresh
-hostname on every restart, and `*.trycloudflare.com` cannot be whitelisted as a
-wildcard. `raw.githubusercontent.com` is a fixed origin that returns
-`access-control-allow-origin: *`, and needs no account, no daemon and no inbound port.
-
-**Freshness: up to ~5 minutes.** GitHub serves the file with `cache-control: max-age=300`
-and the query string is *not* part of its cache key — a `?t=` cache-buster still returns
-`x-cache: HIT`, verified. Nothing can make an update appear sooner than that TTL.
-
-**Cost.** One odds refresh is one API credit (`x-requests-last=1`). Injuries and weather
-are free, so `mlb.py` caches the paid slate for 6 hours (`--odds-ttl`) and refreshes only
-the free parts on the runs in between.
-
-To point the app at some other feed, pass `?feed=<url>`; it takes priority over the
-published URL and the bundled copy, and still has to clear both gates above.
+Polled every 60 s; a newly-arrived notification jumps to the front of the view.
 
 ## Design constraints this app respects
 
@@ -203,42 +102,45 @@ published URL and the bundled copy, and still has to clear both gates above.
   pixel coordinates.
 - At most 8 non-image containers per page; exactly one has `isEventCapture: 1`.
 - No `zOrderIndex` anywhere, or it must be set on **every** container — so it is
-  omitted and declaration order is used.
-- `textColor` is 0–4 (brightness, not colour); `borderColor` is 0–15.
-- `CLICK_EVENT` is `0`, and protobuf drops zero-value fields, so a single tap arrives
-  with `eventType` **undefined**. The default is resolved inside the envelope check —
-  `sysEvent?.eventType ?? CLICK_EVENT` would report a click on every scroll and exit frame.
-- Scroll gestures arrive on `textEvent`; taps, double-taps and lifecycle on `sysEvent`.
-  They are never mixed.
-- Double-tap is checked **before** click, and exits from either envelope.
-- Container names are capped at 16 chars — the title renders `G2HERMES · <category>` and
-  is truncated to fit.
+  omitted deliberately.
+- Container names are capped at 16 chars — the title renders `G2HERMES · <category>`
+  and is truncated to fit.
 - 1,000-char budget at page creation, 2,000 on `textContainerUpgrade`.
-- `app.json`'s `version` must be plain `x.y.z` — the packer rejects a semver
-  prerelease suffix, so `1.0.0-beta.1` fails validation with
-  `version: must be in x.y.z format`. The manifest therefore carries `1.0.0` and the
-  beta identifier lives in the git tag and the GitHub release, not in the manifest.
+- `app.json`'s `version` must be plain `x.y.z` — the packer rejects a prerelease
+  suffix, so the beta identifier lives in the git tag, not the manifest.
+- `localStorage` is the only durable store (no file system, no clipboard). It survives
+  backgrounding and lock on both platforms; in-memory JS state does **not** survive
+  Android suspension, so rebuild it on relaunch.
 
-## Verifying
+## Build and verify
 
 ```bash
-npm run verify     # bundle against the stub SDK + run 24 assertions
+npm install
+npm run dev        # Vite dev server
+npm run verify     # 24 assertions against a stub SDK — no hardware, no GTK3
+npm run pack       # -> g2hermes.ehpk
 ```
 
-Covers page creation (container count, single event capturer, canvas bounds,
-`textColor` range, all-or-nothing `zOrderIndex`), the rendered strings (title shows
-the category, body shows the notification and its position), input routing
-(undefined-as-click, scroll stepping in both directions, double-tap exit from both
-envelopes, scroll-never-exits, repaint suppression), and the no-crash path when the
-feed fetch fails.
+`npm run verify` bundles `src/main.ts` against a faithful stub of the SDK (real enum
+values from `index.d.ts`) and asserts container geometry, rendered strings and input
+routing. It runs anywhere — no glasses required.
+
+To sideload over your LAN:
+
+```bash
+npm run qr -- --url "http://<YOUR-LAN-IP>:5173"
+```
 
 ## Known limits
 
-- The LVGL simulator (`@evenrealities/evenhub-simulator`) needs GTK3
-  (`libgdk-3.so.0`) and could not run in the container this was built in — no root to
-  install it. The offline harness above was used instead. Run `npm run simulate` on a
-  normal desktop for the real render.
-- Nothing has been confirmed on physical glasses; the simulator is explicitly not a
-  hardware emulator, and neither is the harness.
-- The MLB model is not backtested. Its inputs are the market, the two starters' season
-  ERAs, and (as context only) park wind.
+- **Not verified on hardware.** No physical G2 was available to the author.
+- **The LVGL simulator is not used here.** `@evenrealities/evenhub-simulator` needs GTK3
+  (`libgdk-3.so.0`). Run `npm run simulate` on a normal desktop.
+- **No runtime credential entry is implemented yet.** `localStorage` is read, but the
+  camera-QR flow that would populate it is not built. Today the endpoint is effectively
+  a build-time setting.
+- **No secret is safe in this package.** Anything compiled into an `.ehpk` can be
+  extracted, so never ship a long-lived credential inside the app; prefer a token your
+  server can revoke.
+- **The bundled `/feed.json` is a snapshot**, frozen at build time. It is a fallback,
+  not a live source.

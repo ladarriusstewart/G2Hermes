@@ -7,44 +7,38 @@ import {
 } from '@evenrealities/even_hub_sdk'
 
 /**
- * G2Hermes — notifications from Hermes, rendered on the Even G2.
+ * G2Hermes — a notification feed for the Even Realities G2.
  *
- * The feed is a flat list of notifications, each tagged with a category
- * (`mlb`, `system`, ...). Categories are how this grows: every feed generator
- * owns one category and replaces it wholesale. The app renders whatever is in
- * the list, newest first, so adding a feed needs no app change.
+ * The feed is a flat list of notifications, each tagged with a category. The app
+ * renders whatever it finds, newest first, so adding a feed generator on your own
+ * server never requires an app change.
  *
- * Feed resolution — tried in order, first success wins:
- *   1. ?feed=<url> query param (must be in app.json's network whitelist)
- *   2. the published feed (REMOTE_FEED) — what Hermes actually serves
- *   3. /feed.json — the copy bundled in this package, a frozen snapshot from
- *      build time. Only useful as a fallback, never as the live source.
+ * This app ships with NO server, no credentials and no feed baked in. You point it
+ * at your own endpoint.
+ *
+ * ## Configuring the endpoint
+ *
+ * The origin must be in `app.json`'s network whitelist. That list is static and
+ * **cannot contain wildcards**, and it is compiled into the `.ehpk`, so a new origin
+ * means editing `app.json` and rebuilding. Two ways to set the URL itself:
+ *
+ *   1. Build time — set ENDPOINT below (and whitelist its origin in app.json).
+ *   2. Run time  — store `g2hermes.endpoint` in localStorage. The SDK's device bridge
+ *      exposes no keyboard, no file system and no clipboard, so the practical way to
+ *      get a URL onto the device is `captureImageFromCamera()` reading a setup QR
+ *      code (the `camera` permission), handing it to
+ *      `localStorage.setItem('g2hermes.endpoint', url)`.
+ *
+ * Resolution order, first success wins:
+ *   1. ?feed=<url>                     — manual override
+ *   2. localStorage g2hermes.endpoint  — set at runtime
+ *   3. ENDPOINT                        — the build-time value below
  */
+const ENDPOINT = '' // <-- set your feed URL here, e.g. 'https://example.com/g2hermes/feed.json'
 
 const READY_MARKER = '[g2hermes] ready'
-
-/**
- * Where Hermes publishes the feed. This origin is fixed and returns
- * `access-control-allow-origin: *`.
- *
- * Both properties are required, not cosmetic. app.json's network whitelist takes
- * full origins only — no bare hostnames, no wildcards — so the hostname can never
- * change. A tunnel (cloudflared, ngrok, serveo) hands out a fresh hostname on every
- * restart, which would mean repacking the app and re-installing it on the glasses
- * each time. A raw GitHub path is stable forever, so the feed's transport is a
- * commit rather than a server.
- */
-const REMOTE_FEED =
-  'https://raw.githubusercontent.com/ladarriusstewart/G2Hermes/main/public/feed.json'
-const LOCAL_FEED = '/feed.json'
-
-/**
- * GitHub's CDN holds the feed for max-age=300 and the query string is not part of
- * its cache key, so a cache-buster does nothing — polling faster than the cache
- * cannot make updates appear sooner. 60 s bounds the extra lag at a minute without
- * pointless traffic. (The WebView may also be frozen while backgrounded; the poll
- * is best-effort.)
- */
+const STORE_ENDPOINT = 'g2hermes.endpoint'
+const STORE_TOKEN = 'g2hermes.token'
 const POLL_MS = 60_000
 const CONTAINER_TITLE = 1
 const CONTAINER_BODY = 2
@@ -65,17 +59,48 @@ const FALLBACK: Feed = {
   feed: 'g2hermes',
   version: 2,
   notifications: [{
-    id: 0, category: 'system', title: 'No feed',
-    body: 'Could not reach the feed. Showing the bundled fallback so the screen is not blank.',
+    id: 0, category: 'setup', title: 'Not configured',
+    body: 'No feed endpoint is set.\n\nSet ENDPOINT in src/main.ts and whitelist its '
+      + 'origin in app.json, then rebuild — or store g2hermes.endpoint in localStorage '
+      + 'at runtime.',
   }],
 }
 
-function feedSources(): string[] {
+/** Read a value the WebView persisted. localStorage survives backgrounding and lock. */
+function stored(key: string): string {
+  try {
+    return (globalThis.localStorage?.getItem(key) || '').trim()
+  } catch {
+    return ''
+  }
+}
+
+type Source = { url: string; init?: RequestInit }
+
+function feedSources(): Source[] {
+  const out: Source[] = []
   const q = new URLSearchParams(location.search).get('feed')
-  const out: string[] = []
-  if (q && /^https?:\/\//i.test(q)) out.push(q)
-  out.push(REMOTE_FEED, LOCAL_FEED)
+  if (q && /^https?:\/\//i.test(q)) out.push({ url: q, init: withAuth() })
+
+  const runtime = stored(STORE_ENDPOINT)
+  if (runtime) out.push({ url: runtime, init: withAuth() })
+
+  if (ENDPOINT) out.push({ url: ENDPOINT, init: withAuth() })
+
+  // A packager may ship a snapshot alongside the app; useful only as a last resort.
+  out.push({ url: '/feed.json' })
   return out
+}
+
+/**
+ * Attach the bearer token when one is stored. A custom header makes this a
+ * non-simple request, so the server must answer the OPTIONS preflight too.
+ */
+function withAuth(): RequestInit {
+  const token = stored(STORE_TOKEN)
+  return token
+    ? { cache: 'no-store', headers: { Authorization: `Bearer ${token}` } }
+    : { cache: 'no-store' }
 }
 
 function ageOf(ts?: string): string {
@@ -146,10 +171,17 @@ function render(): void {
     return
   }
 
-  upgrade(CONTAINER_TITLE, 'title', `G2HERMES · ${n.category}`.slice(0, TITLE_MAX))
+  // The title container is 40 px tall across 576 px, so roughly 16 characters fit.
+  // Categories are chosen by whoever produces the feed and can be arbitrarily long,
+  // so `G2HERMES · <category>` would eat the whole budget and truncate the very word
+  // that identifies the notification. When it does not fit, drop the app name — the
+  // wearer knows what app they opened; the category is the informative part.
+  const label = `G2HERMES · ${n.category}`
+  upgrade(CONTAINER_TITLE, 'title',
+    label.length <= TITLE_MAX ? label : n.category.slice(0, TITLE_MAX))
 
-  // The feed's own publish time is shown alongside the notification's age: with a
-  // cached CDN copy in the path, "how stale is my data" is the question a glance
+  // Show the feed's own publish time next to the notification's age: when a cache
+  // sits between the server and here, "how stale is this" is the question a glance
   // should answer.
   const meta = [
     ageOf(n.ts),
@@ -163,22 +195,21 @@ function render(): void {
 }
 
 async function loadFeed(reason: string): Promise<void> {
-  const sources = feedSources()
-  for (const url of sources) {
+  for (const source of feedSources()) {
     try {
-      const res = await fetch(url, { cache: 'no-store' })
+      const res = await fetch(source.url, source.init ?? { cache: 'no-store' })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = (await res.json()) as Feed
       if (!Array.isArray(data?.notifications)) throw new Error('feed has no notifications array')
       const prevNewest = feed.notifications[0]?.id
       feed = data
       if (data.notifications[0]?.id !== prevNewest) index = 0  // new arrival -> jump to it
-      console.log(`${READY_MARKER} feed loaded (${reason}) from ${url} — ${data.notifications.length} notification(s)`)
+      console.log(`${READY_MARKER} feed loaded (${reason}) from ${source.url} — ${data.notifications.length} notification(s)`)
       render()
       return
     } catch (err) {
       // Keep the last good feed on screen and fall through to the next source.
-      console.warn(`${READY_MARKER} source failed (${reason}): ${url}`, err)
+      console.warn(`${READY_MARKER} source failed (${reason}): ${source.url}`, err)
     }
   }
   console.error(`${READY_MARKER} every feed source failed (${reason})`)

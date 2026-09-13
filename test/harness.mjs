@@ -10,7 +10,7 @@
 import { readFileSync } from 'node:fs'
 import assert from 'node:assert'
 
-const feed = JSON.parse(readFileSync(new URL('../public/feed.json', import.meta.url)))
+const feed = JSON.parse(readFileSync(new URL('./fixture-feed.json', import.meta.url)))
 
 globalThis.location = { search: '' }
 globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => feed })
