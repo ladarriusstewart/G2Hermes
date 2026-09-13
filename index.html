@@ -3,11 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no" />
-    <title>Hermes Inbox</title>
+    <title>G2Con</title>
     <style>
       html, body {
         margin: 0;
-        height: 100%;
+        min-height: 100%;
         background: #232323;
         color: #E5E5E5;
         font: 14px/1.5 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
@@ -15,30 +15,38 @@
         -webkit-text-size-adjust: 100%;
         overscroll-behavior: none;
       }
-      #app { padding: 20px; max-width: 620px; }
-      h1 { font-size: 15px; font-weight: 600; letter-spacing: .08em; color: #7dd37d; margin: 0 0 4px; }
-      p.sub { margin: 0 0 18px; color: #9a9a9a; font-size: 12px; }
-      .msg { border: 1px solid #3a3a3a; border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; }
-      .msg b { color: #E5E5E5; }
-      .msg small { color: #8f8f8f; display: block; margin-top: 6px; }
-      code { background: #2c2c2c; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+      #app { padding: 20px; max-width: 660px; }
+      h1 { font-size: 15px; font-weight: 600; letter-spacing: .1em; color: #7dd37d; margin: 0 0 4px; }
+      p.sub { margin: 0 0 16px; color: #9a9a9a; font-size: 12px; }
+      .n { border: 1px solid #3a3a3a; border-radius: 8px; padding: 11px 13px; margin-bottom: 9px; }
+      .n .t { font-weight: 600; }
+      .n .b { color: #c9c9c9; white-space: pre-wrap; margin-top: 5px; font-size: 13px; }
+      .n small { color: #8f8f8f; display: block; margin-top: 7px; font-size: 11px; }
+      .chip { display: inline-block; background: #2f4a2f; color: #9ede9e; border-radius: 999px;
+              padding: 1px 8px; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; margin-right: 7px; }
+      .chip.p { background: #4a3a2f; color: #edc89e; }
     </style>
   </head>
   <body>
     <div id="app">
-      <h1>HERMES INBOX</h1>
-      <p class="sub">The glasses render the message. This page is just the companion surface — it lists what has been sent so you can confirm the feed contents.</p>
-      <div id="messages">loading...</div>
+      <h1>G2CON</h1>
+      <p class="sub">Companion surface. The glasses render this list; this page just shows the feed contents so you can confirm what was pushed.</p>
+      <div id="feed">loading…</div>
     </div>
     <script type="module" src="/src/main.ts"></script>
     <script type="module">
-      const box = document.getElementById('messages')
+      const box = document.getElementById('feed')
+      const esc = (s) => String(s ?? '').replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]))
       const load = async () => {
         try {
-          const feed = await (await fetch('/messages.json', { cache: 'no-store' })).json()
-          box.innerHTML = feed.messages.map(m =>
-            `<div class="msg"><b>${m.text}</b><br>${m.detail ?? ''}<small>#${m.id} · ${m.ts ?? ''}</small></div>`
-          ).join('') || '<div class="msg">no messages</div>'
+          const feed = await (await fetch('/feed.json', { cache: 'no-store' })).json()
+          const list = feed.notifications ?? []
+          box.innerHTML = list.map(n => `
+            <div class="n">
+              <div class="t"><span class="chip${n.priority >= 2 ? ' p' : ''}">${esc(n.category)}</span>${esc(n.title)}</div>
+              <div class="b">${esc(n.body)}</div>
+              <small>#${n.id} · ${esc(n.ts)} · ${esc(n.source ?? '')}${n.priority ? ' · p' + n.priority : ''}</small>
+            </div>`).join('') || '<div class="n">feed is empty</div>'
         } catch (e) {
           box.textContent = 'could not load feed: ' + e
         }

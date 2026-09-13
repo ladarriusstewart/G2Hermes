@@ -7,28 +7,43 @@ import {
 } from '@evenrealities/even_hub_sdk'
 
 /**
- * Hermes Inbox — displays messages sent by Hermes on the Even G2.
+ * G2Con — notifications from Hermes, rendered on the Even G2.
  *
- * Feed resolution order:
+ * The feed is a flat list of notifications, each tagged with a category
+ * (`mlb`, `system`, ...). Categories are how this grows: every feed generator
+ * owns one category and replaces it wholesale. The app renders whatever is in
+ * the list, newest first, so adding a feed needs no app change.
+ *
+ * Feed resolution:
  *   1. ?feed=<url> query param (must be whitelisted in app.json for remote origins)
- *   2. /messages.json — same-origin static file served alongside the app
- *
- * The bundled file means the app never shows a blank screen, even with no
- * network permission granted. Remote mode is opt-in.
+ *   2. /feed.json — same-origin static file served alongside the app
  */
 
-const READY_MARKER = '[hermes-glasses] ready'
-const LOCAL_FEED = '/messages.json'
+const READY_MARKER = '[g2con] ready'
+const LOCAL_FEED = '/feed.json'
 const POLL_MS = 20_000
 const CONTAINER_TITLE = 1
 const CONTAINER_BODY = 2
+const TITLE_MAX = 16
 
-type Message = { id: number; text: string; detail?: string; ts?: string }
-type Feed = { from: string; messages: Message[] }
+type Notification = {
+  id: number
+  category: string
+  title: string
+  body?: string
+  priority?: number
+  ts?: string
+  source?: string
+}
+type Feed = { feed: string; version: number; notifications: Notification[] }
 
 const FALLBACK: Feed = {
-  from: 'Hermes',
-  messages: [{ id: 0, text: 'Hello World', detail: 'Bundled fallback — the feed could not be reached.' }],
+  feed: 'g2con',
+  version: 2,
+  notifications: [{
+    id: 0, category: 'system', title: 'No feed',
+    body: 'Could not reach the feed. Showing the bundled fallback so the screen is not blank.',
+  }],
 }
 
 function feedUrl(): string {
@@ -36,38 +51,34 @@ function feedUrl(): string {
   return q && /^https?:\/\//i.test(q) ? q : LOCAL_FEED
 }
 
+function ageOf(ts?: string): string {
+  if (!ts) return ''
+  const then = Date.parse(ts)
+  if (Number.isNaN(then)) return ''
+  const mins = Math.max(0, Math.round((Date.now() - then) / 60000))
+  if (mins < 1) return 'now'
+  if (mins < 60) return `${mins}m ago`
+  if (mins < 60 * 24) return `${Math.round(mins / 60)}h ago`
+  return `${Math.round(mins / (60 * 24))}d ago`
+}
+
 const bridge = await waitForEvenAppBridge()
 
-// Two text containers. Declaration order is stacking order here (no zOrderIndex
-// on the page, so the SDK keeps declaration order). Only the body captures input.
+// Two text containers, declaration order = stacking order (no zOrderIndex, which
+// is all-or-nothing per page and therefore omitted deliberately). Only the body
+// captures input.
 const titleContainer = new TextContainerProperty({
-  xPosition: 0,
-  yPosition: 0,
-  width: 576,
-  height: 40,
-  borderWidth: 0,
-  borderColor: 5,
-  paddingLength: 6,
-  containerID: CONTAINER_TITLE,
-  containerName: 'title',
-  content: 'HERMES INBOX',
-  textColor: 2,
-  isEventCapture: 0,
+  xPosition: 0, yPosition: 0, width: 576, height: 40,
+  borderWidth: 0, borderColor: 5, paddingLength: 6,
+  containerID: CONTAINER_TITLE, containerName: 'title',
+  content: 'G2CON', textColor: 2, isEventCapture: 0,
 })
 
 const bodyContainer = new TextContainerProperty({
-  xPosition: 0,
-  yPosition: 44,
-  width: 576,
-  height: 244,
-  borderWidth: 1,
-  borderColor: 5,
-  paddingLength: 8,
-  containerID: CONTAINER_BODY,
-  containerName: 'body',
-  content: 'Connecting to feed...',
-  textColor: 4,
-  isEventCapture: 1,
+  xPosition: 0, yPosition: 44, width: 576, height: 244,
+  borderWidth: 1, borderColor: 5, paddingLength: 8,
+  containerID: CONTAINER_BODY, containerName: 'body',
+  content: 'Connecting…', textColor: 4, isEventCapture: 1,
 })
 
 const result = await bridge.createStartUpPageContainer(
@@ -86,47 +97,51 @@ if (result !== 0) {
 
 let feed: Feed = FALLBACK
 let index = 0
-let lastRendered = ''
+const painted = new Map<string, string>()
 
-function render(): void {
-  const m = feed.messages[index]
-  if (!m) {
-    paint('No messages yet.\n\nDouble-tap to exit.')
-    return
-  }
-  const meta = [
-    `from ${feed.from}`,
-    m.ts ? new Date(m.ts).toISOString().slice(5, 16).replace('T', ' ') + 'Z' : null,
-    `${index + 1}/${feed.messages.length}`,
-  ].filter(Boolean).join('  ·  ')
-
-  const body = `${m.text}\n\n${m.detail ?? ''}\n\n${meta}\nTap: next  ·  Double-tap: exit`
-  paint(body)
+function upgrade(id: number, name: string, content: string): void {
+  // textContainerUpgrade no-ops on a containerID/containerName mismatch, and
+  // re-sending identical content is wasted BLE traffic.
+  if (painted.get(name) === content) return
+  painted.set(name, content)
+  bridge.textContainerUpgrade(new TextContainerUpgrade({
+    containerID: id, containerName: name, content,
+  }))
 }
 
-function paint(content: string): void {
-  if (content === lastRendered) return
-  lastRendered = content
-  bridge.textContainerUpgrade(
-    new TextContainerUpgrade({
-      containerID: CONTAINER_BODY,
-      containerName: 'body',
-      content,
-    }),
-  )
+function render(): void {
+  const list = feed.notifications
+  const n = list[index]
+
+  if (!n) {
+    upgrade(CONTAINER_TITLE, 'title', 'G2CON')
+    upgrade(CONTAINER_BODY, 'body', 'No notifications.\n\nDouble-tap to exit.')
+    return
+  }
+
+  upgrade(CONTAINER_TITLE, 'title', `G2CON · ${n.category}`.slice(0, TITLE_MAX))
+
+  const meta = [
+    n.category,
+    ageOf(n.ts),
+    `${index + 1}/${list.length}`,
+    n.priority && n.priority >= 2 ? `p${n.priority}` : null,
+  ].filter(Boolean).join('  ·  ')
+
+  upgrade(CONTAINER_BODY, 'body',
+    `${n.title}\n\n${n.body ?? ''}\n\n${meta}\nTap: next  ·  Double-tap: exit`)
 }
 
 async function loadFeed(reason: string): Promise<void> {
-  const url = feedUrl()
   try {
-    const res = await fetch(url, { cache: 'no-store' })
+    const res = await fetch(feedUrl(), { cache: 'no-store' })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = (await res.json()) as Feed
-    if (!data?.messages?.length) throw new Error('feed has no messages')
-    const previousNewest = feed.messages[0]?.id
+    if (!Array.isArray(data?.notifications)) throw new Error('feed has no notifications array')
+    const prevNewest = feed.notifications[0]?.id
     feed = data
-    if (data.messages[0].id !== previousNewest) index = 0
-    console.log(`${READY_MARKER} feed loaded (${reason}) — ${data.messages.length} message(s)`)
+    if (data.notifications[0]?.id !== prevNewest) index = 0  // new arrival -> jump to it
+    console.log(`${READY_MARKER} feed loaded (${reason}) — ${data.notifications.length} notification(s)`)
   } catch (err) {
     console.error(`${READY_MARKER} feed fetch failed (${reason}):`, err)
   }
@@ -137,10 +152,10 @@ await loadFeed('boot')
 setInterval(() => void loadFeed('poll'), POLL_MS)
 
 /**
- * CLICK_EVENT is 0 and protobuf omits zero-value fields, so a single tap
- * arrives with eventType undefined. Resolve the default INSIDE the envelope
- * check — reading `sysEvent?.eventType ?? CLICK_EVENT` would report a click on
- * every scroll, exit and audio frame.
+ * CLICK_EVENT is 0 and protobuf omits zero-value fields, so a single tap arrives
+ * with eventType undefined. The default must be resolved INSIDE the envelope
+ * check — `sysEvent?.eventType ?? CLICK_EVENT` would report a click on every
+ * scroll, exit and audio frame.
  */
 function eventTypeOf(envelope?: { eventType?: OsEventTypeList }): OsEventTypeList | null {
   if (!envelope) return null
@@ -151,31 +166,25 @@ bridge.onEvenHubEvent((event) => {
   const sysType = eventTypeOf(event.sysEvent)
   const textType = eventTypeOf(event.textEvent)
 
-  // Double-tap must exit from anywhere — it is a root-level check, and it has
-  // to be tested BEFORE click (checking click first would swallow it).
-  // Mode 1 shows the system exit-confirmation dialog, required on the root page.
+  // Root-level check, before click: checking click first would swallow it.
+  // Mode 1 shows the system exit-confirmation dialog, required on a root page.
   if (sysType === OsEventTypeList.DOUBLE_CLICK_EVENT || textType === OsEventTypeList.DOUBLE_CLICK_EVENT) {
     bridge.shutDownPageContainer(1)
     return
   }
 
   if (textType === OsEventTypeList.SCROLL_TOP_EVENT) {
-    index = Math.max(0, index - 1)
-    render()
-    return
+    index = Math.max(0, index - 1); render(); return
   }
   if (textType === OsEventTypeList.SCROLL_BOTTOM_EVENT) {
-    index = Math.min(feed.messages.length - 1, index + 1)
-    render()
-    return
+    index = Math.min(feed.notifications.length - 1, index + 1); render(); return
   }
 
   if (sysType === OsEventTypeList.CLICK_EVENT || textType === OsEventTypeList.CLICK_EVENT) {
-    if (index + 1 < feed.messages.length) {
-      index += 1
-      render()
+    if (index + 1 < feed.notifications.length) {
+      index += 1; render()
     } else {
-      void loadFeed('tap-refresh')
+      void loadFeed('tap-refresh').then(() => { index = 0; render() })
     }
     return
   }

@@ -1,41 +1,94 @@
-# Hermes Inbox — Even G2 plugin
+# G2Con
 
-A message inbox for the Even Realities G2 glasses. Hermes pushes a message into a
-feed; the app reads that feed and renders it on the glasses. Right now the feed
-contains **Hello World**.
+Notifications from Hermes, rendered on the Even Realities G2 glasses.
 
 ```
-Hermes  ──writes──►  public/messages.json  ──fetch──►  plugin (WebView on phone)
-                                                              │  SDK bridge
-                                                              ▼
-                                                       Even G2 display
+feed generator (tools/feeds/*.py)  ──►  public/feed.json  ──fetch──►  G2Con plugin
+        one per category                                                   │
+                                                                           ▼
+                                                                     G2 display
 ```
 
-## What's here
+G2Con is a **notification feed**, not a message list. Every notification carries a
+category, and each generator owns exactly one category and replaces it wholesale.
+That is the whole extension model: adding a feed means adding a generator — the
+app itself never changes.
+
+| Category | Generator | What it pushes |
+|---|---|---|
+| `mlb` | `tools/feeds/mlb.py` | moneyline predictions for today's games |
+| `system` | `tools/notify.py` | manual / heartbeat notifications |
+
+## Layout
 
 | Path | Purpose |
 |---|---|
-| `src/main.ts` | the plugin: builds the page, renders the feed, handles input |
-| `app.json` | Even Hub manifest (`com.hermes.g2inbox`) |
-| `public/messages.json` | the feed Hermes writes to |
-| `tools/send.py` | **the send path** — appends a message to the feed |
+| `src/main.ts` | the plugin — page, render, input routing |
+| `app.json` | Even Hub manifest (`com.hermes.g2con`) |
+| `public/feed.json` | the feed the glasses read |
+| `tools/notify.py` | notification store — the single writer, importable or CLI |
+| `tools/feeds/mlb.py` | MLB moneyline feed |
 | `test/stub-sdk.ts` | faithful offline stand-in for the SDK (test only) |
-| `test/harness.mjs` | 21 offline assertions over the app's logic |
+| `test/harness.mjs` | 24 offline assertions |
 
-`test/` never ships in the `.ehpk` — only `dist/` is packed, and the stub is a
-build-time alias that appears nowhere in the real bundle.
+`test/` never ships — only `dist/` is packed, and the stub is a build-time alias
+that appears nowhere in the real bundle.
 
-## Sending a message
+## Pushing a notification
 
 ```bash
-python3 tools/send.py "Hello World" --detail "Second line under the body"
-python3 tools/send.py --list          # show the feed
-python3 tools/send.py "urgent" --push http://192.168.1.100:8787/messages
+python3 tools/notify.py --category system --title "Hello World" --body "..." --priority 2
+python3 tools/notify.py --list
+python3 tools/notify.py --clear --category mlb
+python3 tools/notify.py --push http://192.168.1.100:8787/notify --category system --title "..."
 ```
 
-The newest message in the feed is what the glasses show. `--push` posts to a
-remote endpoint instead of the local file, for a phone that can't see this
-filesystem.
+## The MLB moneyline feed
+
+```bash
+python3 tools/feeds/mlb.py              # write today's slate into the feed
+python3 tools/feeds/mlb.py --dry-run    # print it, write nothing
+python3 tools/feeds/mlb.py --no-weather # skip park wind lookups
+```
+
+One notification per game, ordered by the model's disagreement with the market,
+plus a summary at the front. Each carries the two-way fair line, the market price
+on both sides with the bookmaker offering it, the pitcher tilt, and a value
+read against the price you'd actually get.
+
+### The model
+
+```
+p_model(home) = clamp( p_market(home) + pitcher_tilt , 0.05 , 0.95 )
+pitcher_tilt  = clamp((ERA_away − ERA_home) × 0.030, −0.080, +0.080)
+```
+
+The starting point is the de-vigged market consensus, because the market already
+prices team strength, home field, bullpens, lineups and rest. The script's only
+contribution is a transparent re-weighting on the two announced starters.
+
+**This is a re-derivation, not claimed alpha.** `0.030` and `0.080` are hand-set,
+not fitted against outcomes. Treat the output as a second opinion on the price.
+
+Reported per game:
+
+- **`model − market`** — how my view differs from the market's view (percentage points).
+- **value** — model probability minus the probability implied by the best *available*
+  price. This is the number that matters for whether a price is worth taking, and
+  it's different from `model − market` because the best price is better than consensus.
+
+Both can be **negative**, which is informative: Milwaukee at 59% against a market
+64% means the model thinks the favourite is overpriced, and the notification says
+so rather than dressing it up as a pick.
+
+### Deliberately excluded from the probability
+
+- **Wind.** A strong out-to-centre wind raises scoring for *both* teams, so it moves
+  the run environment, not the winner. It appears as context ("13 mph out to centre")
+  and never touches the tilt. Winds under 10 mph are reported as too light to matter
+  rather than being labelled by direction, which would imply an effect that isn't there.
+- **Injuries.** Position-player absences move moneylines and there is no reliable
+  injury feed wired in, so the feed says nothing instead of guessing.
 
 ## Running it
 
@@ -50,95 +103,93 @@ npm run simulate       # terminal 2 — evenhub-simulator http://localhost:5173
 Headless, for CI — the simulator exposes an HTTP control plane:
 
 ```bash
-npm run dev
 npm run simulate:headless          # adds --automation-port 9898
 curl http://127.0.0.1:9898/api/ping
 curl -o glasses.png http://127.0.0.1:9898/api/screenshot/glasses
 ```
 
 `/api/screenshot/glasses` returns the 576×288 RGBA framebuffer. **Test lit pixels
-with `alpha > 0`** — background and text both render as pure green, so an RGB
-delta check tells you nothing.
+with `alpha > 0`** — background and text both render as pure green, so an RGB delta
+tells you nothing.
 
-**On real glasses** (QR sideload from the dev server):
+**On real glasses** (QR sideload):
 
 ```bash
-hostname -I | awk '{print $1}'     # your LAN IP
+hostname -I | awk '{print $1}'
 npm run qr -- --url "http://<LAN-IP>:5173"
 ```
 
-Tap **Scan QR** in the Even Realities App (Developer Mode must be on) and point
-it at the terminal. Edits hot-reload without re-scanning.
+Tap **Scan QR** in the Even Realities App (Developer Mode on) and point it at the
+terminal. Edits hot-reload without re-scanning.
 
-**Private build:**
-
-```bash
-npm run pack        # -> hermes-inbox.ehpk
-```
-
-Upload the `.ehpk` through the dev portal to install on your own devices.
+**Private build:** `npm run pack` → `g2con.ehpk`, uploaded through the dev portal.
 
 ## Controls
 
 | Input | Action |
 |---|---|
-| Tap | next (older) message; on the oldest, re-fetch the feed |
-| Swipe up / down | move through messages |
+| Tap | next notification; on the oldest, re-fetch the feed |
+| Swipe up / down | step through notifications |
 | Double-tap | exit, with the system confirmation dialog (mode 1 — required on a root page) |
 
-The feed is also polled every 20 s, so a message Hermes pushes appears without
-touching the glasses.
+The feed is polled every 20 s, and a newly-arrived notification jumps to the front
+of the view automatically.
 
 ## Remote feed mode
 
-By default the app fetches `/messages.json` from its own origin — no network
-permission needed, and it works with no connectivity.
+By default the app fetches `/feed.json` from its own origin — no network permission
+needed, and it works with no connectivity.
 
-To pull from a server you control instead, pass `?feed=<url>` and make **both**
-of these true, or the request never leaves the WebView:
+To pull from a server you control, pass `?feed=<url>` and make **both** true, or the
+request never leaves the WebView:
 
-1. The origin is listed in `app.json` → `permissions[0].whitelist`. The shipped
-   placeholder is `http://192.168.1.100:8787` — replace it with yours. Use
-   `https://` in production; `http://` is for a LAN dev server only.
-2. That server returns `Access-Control-Allow-Origin` (and for JSON bodies,
-   handles the `OPTIONS` preflight).
+1. The origin is in `app.json` → `permissions[0].whitelist`. The shipped placeholder
+   is `http://192.168.1.100:8787`; replace it with yours. `https://` in production;
+   `http://` is for a LAN dev server only.
+2. That server returns `Access-Control-Allow-Origin` (and handles the `OPTIONS`
+   preflight for JSON bodies).
 
-The whitelist is **not** a CORS bypass — they are independent gates, and a
-request that works in `curl` but fails here is almost always missing CORS
-headers on the server.
+The whitelist is **not** a CORS bypass — two independent gates. A request that works
+in `curl` but fails here is almost always missing CORS headers server-side.
 
 ## Design constraints this app respects
 
-- Canvas is 576×288 per eye, 4-bit green. No HTML, no CSS — containers at
-  absolute pixel coordinates.
+- Canvas is 576×288 per eye, 4-bit green. No HTML, no CSS — containers at absolute
+  pixel coordinates.
 - At most 8 non-image containers per page; exactly one has `isEventCapture: 1`.
-- No `zOrderIndex` anywhere, or it must be set on **every** container — the app
-  omits it and relies on declaration order.
-- `textColor` is 0–4 (brightness, not colour); `borderColor` is 0–15. Title uses
-  `textColor: 2`, body `textColor: 4`.
-- `CLICK_EVENT` is `0`, and protobuf drops zero-value fields, so a single tap
-  arrives with `eventType` **undefined**. The default is resolved inside the
-  envelope check — `sysEvent?.eventType ?? CLICK_EVENT` would report a click on
-  every scroll and exit frame.
-- Double-tap is checked **before** click, and exits from any container.
+- No `zOrderIndex` anywhere, or it must be set on **every** container — so it is
+  omitted and declaration order is used.
+- `textColor` is 0–4 (brightness, not colour); `borderColor` is 0–15.
+- `CLICK_EVENT` is `0`, and protobuf drops zero-value fields, so a single tap arrives
+  with `eventType` **undefined**. The default is resolved inside the envelope check —
+  `sysEvent?.eventType ?? CLICK_EVENT` would report a click on every scroll and exit frame.
+- Scroll gestures arrive on `textEvent`; taps, double-taps and lifecycle on `sysEvent`.
+  They are never mixed.
+- Double-tap is checked **before** click, and exits from either envelope.
+- Container names are capped at 16 chars — the title renders `G2CON · <category>` and
+  is truncated to fit.
 - 1,000-char budget at page creation, 2,000 on `textContainerUpgrade`.
 
 ## Verifying
 
 ```bash
-npm run verify     # bundle against the stub SDK + run 21 assertions
+npm run verify     # bundle against the stub SDK + run 24 assertions
 ```
 
 Covers page creation (container count, single event capturer, canvas bounds,
-textColor range, all-or-nothing `zOrderIndex`), the rendered string, input
-routing (undefined-as-click, scroll, double-tap exit from both envelopes,
-scroll-not-exit), and the no-crash path when the feed fetch fails.
+`textColor` range, all-or-nothing `zOrderIndex`), the rendered strings (title shows
+the category, body shows the notification and its position), input routing
+(undefined-as-click, scroll stepping in both directions, double-tap exit from both
+envelopes, scroll-never-exits, repaint suppression), and the no-crash path when the
+feed fetch fails.
 
 ## Known limits
 
 - The LVGL simulator (`@evenrealities/evenhub-simulator`) needs GTK3
-  (`libgdk-3.so.0`). It could not be run in the container this was built in —
-  no root to `apt-get install libgtk-3-0t64`. The offline harness above was used
-  instead. Run `npm run simulate` on a normal desktop to see the real render.
-- On-device behaviour still needs confirming on hardware; the simulator is
-  explicitly not a hardware emulator.
+  (`libgdk-3.so.0`) and could not run in the container this was built in — no root to
+  install it. The offline harness above was used instead. Run `npm run simulate` on a
+  normal desktop for the real render.
+- Nothing has been confirmed on physical glasses; the simulator is explicitly not a
+  hardware emulator, and neither is the harness.
+- The MLB model is not backtested. Its inputs are the market, the two starters' season
+  ERAs, and (as context only) park wind.

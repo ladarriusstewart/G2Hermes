@@ -1,14 +1,14 @@
 {
-  "package_id": "com.hermes.g2inbox",
+  "package_id": "com.hermes.g2con",
   "edition": "202601",
-  "name": "Hermes Inbox",
-  "version": "0.1.0",
+  "name": "G2Con",
+  "version": "0.2.0",
   "min_sdk_version": "0.0.15",
   "entrypoint": "index.html",
   "permissions": [
     {
       "name": "network",
-      "desc": "Fetches messages from the Hermes feed so notes sent by your agent appear on the glasses.",
+      "desc": "Fetches the notification feed so updates pushed by Hermes appear on the glasses.",
       "whitelist": [
         "http://192.168.1.100:8787"
       ]
