@@ -1,5 +1,5 @@
 /**
- * Offline verification of G2Con logic.
+ * Offline verification of G2Hermes logic.
  *
  * Bundles src/main.ts against the stub SDK, runs it in Node with a minimal
  * browser shim, then drives events and asserts on what the app asked the
@@ -57,7 +57,7 @@ const bodyText = () => calls.upgrades.filter((u) => u.containerName === 'body').
 const titleText = () => calls.upgrades.filter((u) => u.containerName === 'title').at(-1)?.content ?? ''
 check('body container was upgraded', () => assert.ok(bodyText(), 'no body upgrade'))
 check('title shows the app name and the category', () => {
-  assert.ok(titleText().includes('G2CON'), `title: ${JSON.stringify(titleText())}`)
+  assert.ok(titleText().includes('G2HERMES'), `title: ${JSON.stringify(titleText())}`)
   assert.ok(titleText().includes(newest.category), `title: ${JSON.stringify(titleText())}`)
 })
 check('title stays within the 16-char container limit', () =>

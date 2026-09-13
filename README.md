@@ -1,15 +1,15 @@
-# G2Con
+# G2Hermes
 
 Notifications from Hermes, rendered on the Even Realities G2 glasses.
 
 ```
-feed generator (tools/feeds/*.py)  ──►  public/feed.json  ──fetch──►  G2Con plugin
+feed generator (tools/feeds/*.py)  ──►  public/feed.json  ──fetch──►  G2Hermes plugin
         one per category                                                   │
                                                                            ▼
                                                                      G2 display
 ```
 
-G2Con is a **notification feed**, not a message list. Every notification carries a
+G2Hermes is a **notification feed**, not a message list. Every notification carries a
 category, and each generator owns exactly one category and replaces it wholesale.
 That is the whole extension model: adding a feed means adding a generator — the
 app itself never changes.
@@ -24,7 +24,7 @@ app itself never changes.
 | Path | Purpose |
 |---|---|
 | `src/main.ts` | the plugin — page, render, input routing |
-| `app.json` | Even Hub manifest (`com.hermes.g2con`) |
+| `app.json` | Even Hub manifest (`com.hermes.g2hermes`) |
 | `public/feed.json` | the feed the glasses read |
 | `tools/notify.py` | notification store — the single writer, importable or CLI |
 | `tools/feeds/mlb.py` | MLB moneyline feed |
@@ -81,14 +81,34 @@ Both can be **negative**, which is informative: Milwaukee at 59% against a marke
 64% means the model thinks the favourite is overpriced, and the notification says
 so rather than dressing it up as a pick.
 
-### Deliberately excluded from the probability
+### In the feed but not in the probability
+
+- **Injuries.** Pulled per game from **ESPN's injuries JSON API**
+  (`site.api.espn.com/apis/site/v2/sports/baseball/mlb/injuries`) and reported as
+  context beside the number — named players, their status, and a `+N more` count.
+  They are deliberately *not* folded into the tilt: "how many points is losing
+  player X worth" needs a fitted model, and a hand-waved constant would be worse
+  than none. Reporting them next to the number lets a human apply the judgement.
+
+  Note it uses the **JSON API, not the injuries web page**. `espn.com/mlb/injuries`
+  is client-rendered, so a plain fetch of that page returns the app shell with zero
+  injury content — the tables only exist after JS runs. The JSON endpoint carries the
+  same data *with* the team attribution the rendered page doesn't expose.
+
+  Long-term statuses (60-day IL) are excluded from the note; they aren't news for
+  today's game and they would bury the short-term absences that actually move a lineup.
 
 - **Wind.** A strong out-to-centre wind raises scoring for *both* teams, so it moves
   the run environment, not the winner. It appears as context ("13 mph out to centre")
   and never touches the tilt. Winds under 10 mph are reported as too light to matter
   rather than being labelled by direction, which would imply an effect that isn't there.
-- **Injuries.** Position-player absences move moneylines and there is no reliable
-  injury feed wired in, so the feed says nothing instead of guessing.
+
+### Coming from outside
+
+- `references/parks.md` (in the `mlb-daily-briefing` skill) supplies park coordinates,
+  roof type and home-plate-to-centre-field bearings for the wind read.
+- The odds and schedule come from the `the-odds-api` skill's client via that skill's
+  `slate.py`.
 
 ## Running it
 
@@ -122,7 +142,7 @@ npm run qr -- --url "http://<LAN-IP>:5173"
 Tap **Scan QR** in the Even Realities App (Developer Mode on) and point it at the
 terminal. Edits hot-reload without re-scanning.
 
-**Private build:** `npm run pack` → `g2con.ehpk`, uploaded through the dev portal.
+**Private build:** `npm run pack` → `g2hermes.ehpk`, uploaded through the dev portal.
 
 ## Controls
 
@@ -166,7 +186,7 @@ in `curl` but fails here is almost always missing CORS headers server-side.
 - Scroll gestures arrive on `textEvent`; taps, double-taps and lifecycle on `sysEvent`.
   They are never mixed.
 - Double-tap is checked **before** click, and exits from either envelope.
-- Container names are capped at 16 chars — the title renders `G2CON · <category>` and
+- Container names are capped at 16 chars — the title renders `G2HERMES · <category>` and
   is truncated to fit.
 - 1,000-char budget at page creation, 2,000 on `textContainerUpgrade`.
 

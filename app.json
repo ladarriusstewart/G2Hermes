@@ -1,8 +1,8 @@
 {
-  "package_id": "com.hermes.g2con",
+  "package_id": "com.hermes.g2hermes",
   "edition": "202601",
-  "name": "G2Con",
-  "version": "0.2.0",
+  "name": "G2Hermes",
+  "version": "0.3.0",
   "min_sdk_version": "0.0.15",
   "entrypoint": "index.html",
   "permissions": [

@@ -7,7 +7,7 @@ import {
 } from '@evenrealities/even_hub_sdk'
 
 /**
- * G2Con — notifications from Hermes, rendered on the Even G2.
+ * G2Hermes — notifications from Hermes, rendered on the Even G2.
  *
  * The feed is a flat list of notifications, each tagged with a category
  * (`mlb`, `system`, ...). Categories are how this grows: every feed generator
@@ -19,7 +19,7 @@ import {
  *   2. /feed.json — same-origin static file served alongside the app
  */
 
-const READY_MARKER = '[g2con] ready'
+const READY_MARKER = '[g2hermes] ready'
 const LOCAL_FEED = '/feed.json'
 const POLL_MS = 20_000
 const CONTAINER_TITLE = 1
@@ -38,7 +38,7 @@ type Notification = {
 type Feed = { feed: string; version: number; notifications: Notification[] }
 
 const FALLBACK: Feed = {
-  feed: 'g2con',
+  feed: 'g2hermes',
   version: 2,
   notifications: [{
     id: 0, category: 'system', title: 'No feed',
@@ -71,7 +71,7 @@ const titleContainer = new TextContainerProperty({
   xPosition: 0, yPosition: 0, width: 576, height: 40,
   borderWidth: 0, borderColor: 5, paddingLength: 6,
   containerID: CONTAINER_TITLE, containerName: 'title',
-  content: 'G2CON', textColor: 2, isEventCapture: 0,
+  content: 'G2HERMES', textColor: 2, isEventCapture: 0,
 })
 
 const bodyContainer = new TextContainerProperty({
@@ -114,12 +114,12 @@ function render(): void {
   const n = list[index]
 
   if (!n) {
-    upgrade(CONTAINER_TITLE, 'title', 'G2CON')
+    upgrade(CONTAINER_TITLE, 'title', 'G2HERMES')
     upgrade(CONTAINER_BODY, 'body', 'No notifications.\n\nDouble-tap to exit.')
     return
   }
 
-  upgrade(CONTAINER_TITLE, 'title', `G2CON · ${n.category}`.slice(0, TITLE_MAX))
+  upgrade(CONTAINER_TITLE, 'title', `G2HERMES · ${n.category}`.slice(0, TITLE_MAX))
 
   const meta = [
     n.category,

@@ -1,13 +1,13 @@
 {
-  "name": "g2con",
+  "name": "g2hermes",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "pack": "npm run build && evenhub pack app.json dist -o g2con.ehpk --sdk-ver 0.0.15",
+    "pack": "npm run build && evenhub pack app.json dist -o g2hermes.ehpk --sdk-ver 0.0.15",
     "simulate": "evenhub-simulator http://localhost:5173",
     "simulate:headless": "evenhub-simulator http://localhost:5173 --automation-port 9898",
     "qr": "evenhub qr --url http://localhost:5173",
