@@ -2,7 +2,7 @@
   "package_id": "com.hermes.g2hermes",
   "edition": "202601",
   "name": "G2Hermes",
-  "version": "0.3.0",
+  "version": "1.0.0",
   "min_sdk_version": "0.0.15",
   "entrypoint": "index.html",
   "permissions": [

@@ -189,6 +189,10 @@ in `curl` but fails here is almost always missing CORS headers server-side.
 - Container names are capped at 16 chars — the title renders `G2HERMES · <category>` and
   is truncated to fit.
 - 1,000-char budget at page creation, 2,000 on `textContainerUpgrade`.
+- `app.json`'s `version` must be plain `x.y.z` — the packer rejects a semver
+  prerelease suffix, so `1.0.0-beta.1` fails validation with
+  `version: must be in x.y.z format`. The manifest therefore carries `1.0.0` and the
+  beta identifier lives in the git tag and the GitHub release, not in the manifest.
 
 ## Verifying
 
