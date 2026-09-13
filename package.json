@@ -1,0 +1,26 @@
+{
+  "name": "hermes-g2-inbox",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "pack": "npm run build && evenhub pack app.json dist -o hermes-inbox.ehpk --sdk-ver 0.0.15",
+    "simulate": "evenhub-simulator http://localhost:5173",
+    "simulate:headless": "evenhub-simulator http://localhost:5173 --automation-port 9898",
+    "qr": "evenhub qr --url http://localhost:5173",
+    "verify": "esbuild src/main.ts --bundle --format=esm --target=esnext --alias:@evenrealities/even_hub_sdk=./test/stub-sdk.ts --outfile=test/app.mjs && node test/harness.mjs",
+    "send": "python3 tools/send.py"
+  },
+  "dependencies": {
+    "@evenrealities/even_hub_sdk": "0.0.15"
+  },
+  "devDependencies": {
+    "@evenrealities/evenhub-cli": "latest",
+    "@evenrealities/evenhub-simulator": "latest",
+    "typescript": "^5.7.0",
+    "vite": "^5.4.0"
+  }
+}
