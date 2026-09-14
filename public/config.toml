@@ -1,0 +1,14 @@
+# G2Hermes endpoint configuration.
+#
+# Set your feed URL here, then rebuild and reinstall:
+#
+#   endpoint = "https://g2feed.example.com/feed.json"
+#
+# - This file ships with the app (public/ -> dist/) and contains no secrets.
+# - The endpoint's origin must also be in app.json's network whitelist,
+#   otherwise the Even Realities App blocks the request before it leaves the WebView.
+# - A bearer token, if your server needs one, is stored at runtime as
+#   localStorage 'g2hermes.token' — never in this file.
+# - Leave empty to render the "Not configured" card.
+
+endpoint = ""

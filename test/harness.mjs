@@ -13,7 +13,17 @@ import assert from 'node:assert'
 const feed = JSON.parse(readFileSync(new URL('./fixture-feed.json', import.meta.url)))
 
 globalThis.location = { search: '' }
-globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => feed })
+// The app reads its endpoint from the bundled config.toml, so the stub has to
+// serve both that file and the feed itself — and record what was requested.
+const CONFIGURED = 'https://feed.example.test/feed.json'
+const requested = []
+globalThis.fetch = async (url) => {
+  requested.push(String(url))
+  if (String(url).endsWith('config.toml')) {
+    return { ok: true, status: 200, text: async () => `# comment\nendpoint = "${CONFIGURED}"\n` }
+  }
+  return { ok: true, status: 200, json: async () => feed }
+}
 
 await import('./app.mjs')   // runs the app; populates the stub's globals
 const emit = globalThis.__emit
@@ -105,6 +115,17 @@ check('re-rendering identical content is suppressed (no wasted BLE)', () => {
   emit({ sysEvent: { eventType: OsEventTypeList.LONG_PRESS_EVENT } })
   assert.equal(ups(), n, 'a long press caused a repaint')
 })
+
+console.log('\n--- config.toml endpoint ---')
+check('config.toml was read at boot', () =>
+  assert.ok(requested.some((u) => u.endsWith('config.toml')), `requested: ${requested.join(', ')}`))
+check('the endpoint from config.toml is what the app fetched', () =>
+  assert.ok(requested.includes(CONFIGURED), `requested: ${requested.join(', ')}`))
+check('config.toml is read before the feed is requested', () =>
+  assert.ok(requested.indexOf(requested.find((u) => u.endsWith('config.toml')))
+    < requested.indexOf(CONFIGURED), 'feed fetched before config was resolved'))
+check('the placeholder ./feed.json snapshot is not used when configured', () =>
+  assert.ok(!requested.includes('/feed.json'), `requested: ${requested.join(', ')}`))
 
 console.log('\n--- fallback behaviour ---')
 globalThis.fetch = async () => { throw new Error('network down') }

@@ -41,15 +41,30 @@ WebView. Two things to know, both of which shape the design:
 - It takes **full origins only — no bare hostnames, no wildcards.**
 - It is compiled into the `.ehpk`, so changing it means **rebuilding and reinstalling**.
 
-**2. Set the endpoint.** Either set `ENDPOINT` in `src/main.ts` before building, or
-store it at runtime as `g2hermes.endpoint` in `localStorage`.
+**2. Set the endpoint.** Put it in `public/config.toml` (shipped with the app as
+`./config.toml`) and rebuild:
 
-Runtime is the interesting case: the SDK bridge exposes **no keyboard, no file system
-and no clipboard**, so there is no way to type a URL on the device. The practical
-runtime path is a **setup QR code** read with `captureImageFromCamera()` (the `camera`
-permission), which hands the URL to `localStorage.setItem()`. A stored
-`g2hermes.token` is sent as `Authorization: Bearer …` — a custom header, so your
-server must answer the `OPTIONS` preflight as well.
+```toml
+endpoint = "https://your-endpoint.example.com/feed.json"
+```
+
+That file holds the **URL only — never a credential**, so it is safe to commit and
+easy to diff. A bearer token is read at runtime from `localStorage`
+(`g2hermes.token`) and sent as `Authorization: Bearer <token>` — a custom header, so
+your server must answer the `OPTIONS` preflight as well.
+
+Precedence, if you prefer another path:
+
+1. `?feed=<url>` — manual override
+2. `localStorage` `g2hermes.endpoint` — set at runtime
+3. `config.toml` `endpoint` — the bundled file
+4. `ENDPOINT` in `src/main.ts` — compile-time fallback
+
+Runtime remains the interesting case: the SDK bridge exposes **no keyboard, no file
+system and no clipboard**, so there is no way to type a URL on the device. The
+practical runtime path is a **setup QR code** read with `captureImageFromCamera()`
+(the `camera` permission), which hands the URL to `localStorage.setItem()`. Setting
+`config.toml` at build time avoids all of that.
 
 **3. Your server must send CORS headers.** The whitelist is **not** a CORS bypass —
 they are two independent gates. At minimum:
@@ -58,14 +73,24 @@ they are two independent gates. At minimum:
 Access-Control-Allow-Origin: *
 ```
 
-## Resolution order
+## config.toml
 
-First success wins; a failure falls through and the last good feed stays on screen:
+The bundled file is read once at boot and cached, then its endpoint is tried in the
+order above. It is parsed by a deliberately tiny line-matcher, not a TOML library —
+one key does not justify a dependency, and anything unrecognised degrades to "not
+configured" rather than throwing.
 
-1. `?feed=<url>` — manual override
-2. `localStorage` `g2hermes.endpoint`
-3. `ENDPOINT` in `src/main.ts`
-4. `/feed.json` — an optional snapshot shipped alongside the app
+```toml
+endpoint = "https://your-endpoint.example.com/feed.json"
+```
+
+- **An empty or absent `endpoint` is valid.** The app falls through to the next
+  source and, if none work, renders the "Not configured" card — it never crashes and
+  never clears a feed already on screen.
+- **Only `endpoint` is read.** Any other key in the file is ignored.
+- **`config.toml` cannot carry a secret.** It ships inside the `.ehpk`, which is
+  extractable; tokens belong in `localStorage`.
+- **Changing it needs a rebuild** — it is bundled, not fetched from your server.
 
 ## Feed format
 
@@ -117,13 +142,14 @@ Polled every 60 s; a newly-arrived notification jumps to the front of the view.
 ```bash
 npm install
 npm run dev        # Vite dev server
-npm run verify     # 24 assertions against a stub SDK — no hardware, no GTK3
+npm run verify     # 28 assertions against a stub SDK — no hardware, no GTK3
 npm run pack       # -> g2hermes.ehpk
 ```
 
 `npm run verify` bundles `src/main.ts` against a faithful stub of the SDK (real enum
-values from `index.d.ts`) and asserts container geometry, rendered strings and input
-routing. It runs anywhere — no glasses required.
+values from `index.d.ts`) and asserts container geometry, rendered strings, input
+routing, and that `config.toml` is read before the feed is requested. It runs
+anywhere — no glasses required.
 
 To sideload over your LAN:
 
@@ -137,10 +163,11 @@ npm run qr -- --url "http://<YOUR-LAN-IP>:5173"
 - **The LVGL simulator is not used here.** `@evenrealities/evenhub-simulator` needs GTK3
   (`libgdk-3.so.0`). Run `npm run simulate` on a normal desktop.
 - **No runtime credential entry is implemented yet.** `localStorage` is read, but the
-  camera-QR flow that would populate it is not built. Today the endpoint is effectively
-  a build-time setting.
+  camera-QR flow that would populate it is not built. A bearer token must therefore be
+  injected by other means today; the *endpoint* no longer depends on this, since it
+  lives in `config.toml`.
 - **No secret is safe in this package.** Anything compiled into an `.ehpk` can be
   extracted, so never ship a long-lived credential inside the app; prefer a token your
   server can revoke.
 - **The bundled `/feed.json` is a snapshot**, frozen at build time. It is a fallback,
-  not a live source.
+  not a live source — `config.toml` is the supported way to point the app at a feed.
