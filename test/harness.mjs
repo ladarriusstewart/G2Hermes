@@ -13,15 +13,14 @@ import assert from 'node:assert'
 const feed = JSON.parse(readFileSync(new URL('./fixture-feed.json', import.meta.url)))
 
 globalThis.location = { search: '' }
-// The app reads its endpoint from the bundled config.toml, so the stub has to
-// serve both that file and the feed itself — and record what was requested.
-const CONFIGURED = 'https://feed.example.test/feed.json'
+// The endpoint is generated from app.json (see scripts/gen-endpoint.mjs), which
+// `npm run verify` regenerates from test/fixture-app.json — so the URL asserted
+// below comes from the fixture manifest, not from a hardcoded literal.
+const manifest = JSON.parse(readFileSync(new URL('./fixture-app.json', import.meta.url)))
+const CONFIGURED = manifest.permissions.find((p) => p.name === 'network').endpoint
 const requested = []
 globalThis.fetch = async (url) => {
   requested.push(String(url))
-  if (String(url).endsWith('config.toml')) {
-    return { ok: true, status: 200, text: async () => `# comment\nendpoint = "${CONFIGURED}"\n` }
-  }
   return { ok: true, status: 200, json: async () => feed }
 }
 
@@ -116,14 +115,13 @@ check('re-rendering identical content is suppressed (no wasted BLE)', () => {
   assert.equal(ups(), n, 'a long press caused a repaint')
 })
 
-console.log('\n--- config.toml endpoint ---')
-check('config.toml was read at boot', () =>
-  assert.ok(requested.some((u) => u.endsWith('config.toml')), `requested: ${requested.join(', ')}`))
-check('the endpoint from config.toml is what the app fetched', () =>
+console.log('\n--- app.json endpoint ---')
+check('the endpoint comes from app.json', () =>
+  assert.ok(CONFIGURED && CONFIGURED.includes('/feed.json'), `fixture endpoint: ${CONFIGURED}`))
+check('the app fetched exactly the endpoint from app.json', () =>
   assert.ok(requested.includes(CONFIGURED), `requested: ${requested.join(', ')}`))
-check('config.toml is read before the feed is requested', () =>
-  assert.ok(requested.indexOf(requested.find((u) => u.endsWith('config.toml')))
-    < requested.indexOf(CONFIGURED), 'feed fetched before config was resolved'))
+check('no config file is fetched — the endpoint is compiled in', () =>
+  assert.ok(!requested.some((u) => u.endsWith('config.toml')), `requested: ${requested.join(', ')}`))
 check('the placeholder ./feed.json snapshot is not used when configured', () =>
   assert.ok(!requested.includes('/feed.json'), `requested: ${requested.join(', ')}`))
 

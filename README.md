@@ -25,72 +25,97 @@ a generic renderer: it does not know or care what the notifications are about.
 
 ## Configure it
 
-**1. Whitelist your origin.** In `app.json`, replace the placeholder:
+**Do it in one file: `app.json`.** The endpoint and the whitelist that permits it sit
+together in the `network` permission, because they are useless apart:
 
 ```json
 "permissions": [
   { "name": "network",
     "desc": "Fetches the notification feed from the endpoint you configure.",
+    "endpoint": "https://your-endpoint.example.com/feed.json",
     "whitelist": ["https://your-endpoint.example.com"] }
 ]
 ```
 
-This list is enforced by the Even Realities App *before* the request leaves the
-WebView. Two things to know, both of which shape the design:
+Then `npm run pack` and reinstall.
 
-- It takes **full origins only — no bare hostnames, no wildcards.**
-- It is compiled into the `.ehpk`, so changing it means **rebuilding and reinstalling**.
+**Why one file.** The whitelist is enforced by the Even Realities App *before* the
+request leaves the WebView, and it takes **full origins only — no bare hostnames, no
+wildcards.** A URL whose origin isn't listed fails silently on the device: the feed
+just never loads. Keeping both values adjacent is what makes that mismatch visible
+while editing, and `scripts/gen-endpoint.mjs` makes it impossible to ship — see below.
 
-**2. Set the endpoint.** Put it in `public/config.toml` (shipped with the app as
-`./config.toml`) and rebuild:
+Two constraints that shape the design:
 
-```toml
-endpoint = "https://your-endpoint.example.com/feed.json"
+- The whitelist is compiled into the `.ehpk`, so changing it means **rebuilding and
+  reinstalling**.
+- **Never put a credential in `app.json`.** The package is extractable, so a token
+  belongs in `localStorage` (`g2hermes.token`), sent as `Authorization: Bearer <token>`
+  — a custom header, so your server must answer the `OPTIONS` preflight too.
+
+### The build refuses to ship a mismatch
+
+`endpoint` is read at build time by `scripts/gen-endpoint.mjs`, which regenerates
+`src/generated-endpoint.ts`. If the endpoint's origin is missing from the whitelist,
+**the build fails** with the exact line to add:
+
+```
+[endpoint] app.json would fail on the device.
+
+           endpoint : https://your-endpoint.example.com/feed.json
+           origin   : https://your-endpoint.example.com
+           whitelist: https://your-endpoint.example.com
+
+           The whitelist is enforced before the request leaves the WebView and
+           accepts full origins only — no wildcards. Add this to app.json:
+
+             "whitelist": [ "https://your-endpoint.example.com" ]
 ```
 
-That file holds the **URL only — never a credential**, so it is safe to commit and
-easy to diff. A bearer token is read at runtime from `localStorage`
-(`g2hermes.token`) and sent as `Authorization: Bearer <token>` — a custom header, so
-your server must answer the `OPTIONS` preflight as well.
+An empty `endpoint` is valid: the app renders a "Not configured" card instead.
 
-Precedence, if you prefer another path:
+Precedence, first success wins:
 
 1. `?feed=<url>` — manual override
 2. `localStorage` `g2hermes.endpoint` — set at runtime
-3. `config.toml` `endpoint` — the bundled file
-4. `ENDPOINT` in `src/main.ts` — compile-time fallback
+3. `app.json` `endpoint` — compiled in at build time
 
 Runtime remains the interesting case: the SDK bridge exposes **no keyboard, no file
 system and no clipboard**, so there is no way to type a URL on the device. The
 practical runtime path is a **setup QR code** read with `captureImageFromCamera()`
 (the `camera` permission), which hands the URL to `localStorage.setItem()`. Setting
-`config.toml` at build time avoids all of that.
+`app.json` at build time avoids all of that.
 
-**3. Your server must send CORS headers.** The whitelist is **not** a CORS bypass —
+**Your server must send CORS headers.** The whitelist is **not** a CORS bypass —
 they are two independent gates. At minimum:
 
 ```
 Access-Control-Allow-Origin: *
 ```
 
-## config.toml
+## How the endpoint reaches the app
 
-The bundled file is read once at boot and cached, then its endpoint is tried in the
-order above. It is parsed by a deliberately tiny line-matcher, not a TOML library —
-one key does not justify a dependency, and anything unrecognised degrades to "not
-configured" rather than throwing.
+`scripts/gen-endpoint.mjs` runs before `dev`, `build` and `verify`. It reads
+`app.json`, validates it, and writes `src/generated-endpoint.ts`:
 
-```toml
-endpoint = "https://your-endpoint.example.com/feed.json"
+```ts
+export const ENDPOINT = "https://your-endpoint.example.com/feed.json"
 ```
 
+`src/main.ts` imports that constant, so the URL is **compiled in, not fetched** —
+there is no config request at boot and no way for this source to fail on its own.
+Details worth knowing:
+
+- **Only `network.endpoint` is read.** Other keys are ignored; extra fields the SDK
+  may add later won't break it.
 - **An empty or absent `endpoint` is valid.** The app falls through to the next
   source and, if none work, renders the "Not configured" card — it never crashes and
   never clears a feed already on screen.
-- **Only `endpoint` is read.** Any other key in the file is ignored.
-- **`config.toml` cannot carry a secret.** It ships inside the `.ehpk`, which is
-  extractable; tokens belong in `localStorage`.
-- **Changing it needs a rebuild** — it is bundled, not fetched from your server.
+- **Validation is a build gate.** An unparseable URL, or one whose origin isn't
+  whitelisted, fails the build with the fix printed. You cannot ship a package that
+  would fail on the device.
+- **`src/generated-endpoint.ts` is generated, never edited or committed.**
+- **Changing the endpoint needs a rebuild**, since it is compiled in.
 
 ## Feed format
 
@@ -146,9 +171,13 @@ npm run verify     # 28 assertions against a stub SDK — no hardware, no GTK3
 npm run pack       # -> g2hermes.ehpk
 ```
 
+`npm run gen` (run automatically before `dev`, `build` and `verify`) turns `app.json`'s
+`endpoint` into `src/generated-endpoint.ts`. Run it alone to check your manifest
+without doing a full build.
+
 `npm run verify` bundles `src/main.ts` against a faithful stub of the SDK (real enum
 values from `index.d.ts`) and asserts container geometry, rendered strings, input
-routing, and that `config.toml` is read before the feed is requested. It runs
+routing, and that the endpoint compiled in from `app.json` is what gets fetched. It runs
 anywhere — no glasses required.
 
 To sideload over your LAN:
@@ -165,9 +194,9 @@ npm run qr -- --url "http://<YOUR-LAN-IP>:5173"
 - **No runtime credential entry is implemented yet.** `localStorage` is read, but the
   camera-QR flow that would populate it is not built. A bearer token must therefore be
   injected by other means today; the *endpoint* no longer depends on this, since it
-  lives in `config.toml`.
+  lives in `app.json` and is compiled in.
 - **No secret is safe in this package.** Anything compiled into an `.ehpk` can be
   extracted, so never ship a long-lived credential inside the app; prefer a token your
   server can revoke.
 - **The bundled `/feed.json` is a snapshot**, frozen at build time. It is a fallback,
-  not a live source — `config.toml` is the supported way to point the app at a feed.
+  not a live source — `app.json`'s `endpoint` is the supported way to point the app at a feed.

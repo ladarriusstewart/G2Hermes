@@ -18,26 +18,26 @@ import {
  *
  * ## Configuring the endpoint
  *
- * Set `endpoint` in `config.toml` (project root `public/config.toml`, served as
- * `./config.toml` alongside the app) and whitelist its origin in `app.json`,
- * then rebuild. The file carries the URL only — never credentials; a bearer
- * token lives at runtime in `localStorage g2hermes.token`.
+ * Set `endpoint` in `app.json` — the same file as the network `whitelist` that
+ * permits it — then rebuild. Both halves of network access live in one place
+ * because they are useless apart: the whitelist is enforced *before* the request
+ * leaves the WebView, so a mismatch fails silently on the device.
  *
- * The origin must be in `app.json`'s network whitelist. That list is static and
- * **cannot contain wildcards**, and it is compiled into the `.ehpk`, so a new origin
- * means editing `app.json` and rebuilding. A second runtime path also exists:
- * store `g2hermes.endpoint` in localStorage (e.g. via a setup QR code read with
- * `captureImageFromCamera()` and `localStorage.setItem('g2hermes.endpoint', url)`),
- * for when retyping the URL beats rebuilding.
+ * `scripts/gen-endpoint.mjs` reads that field at build time and regenerates
+ * `src/generated-endpoint.ts`, so the URL is compiled in rather than fetched. It
+ * also refuses to build an endpoint whose origin is missing from the whitelist,
+ * turning a silent device-side failure into a clear build error.
+ *
+ * `localStorage g2hermes.endpoint` still overrides at runtime, and a bearer token
+ * is read from `localStorage` (`g2hermes.token`) — so no credential ever belongs
+ * in `app.json`, which ships inside an extractable package.
  *
  * Resolution order, first success wins:
  *   1. ?feed=<url>                     — manual override
  *   2. localStorage g2hermes.endpoint  — set at runtime
- *   3. config.toml `endpoint`          — the bundled file (this release's change)
- *   4. ENDPOINT                        — compile-time fallback below
+ *   3. ENDPOINT                        — generated from app.json
  */
-const ENDPOINT = '' // <-- compile-time fallback; prefer config.toml
-const CONFIG_TOML = 'config.toml'
+import { ENDPOINT } from './generated-endpoint'
 
 const READY_MARKER = '[g2hermes] ready'
 const STORE_ENDPOINT = 'g2hermes.endpoint'
@@ -63,34 +63,8 @@ const FALLBACK: Feed = {
   version: 2,
   notifications: [{
     id: 0, category: 'setup', title: 'Not configured',
-    body: 'No feed endpoint is set.\n\nSet `endpoint` in config.toml (public/) and whitelist its '
-      + 'origin in app.json, then rebuild — or store g2hermes.endpoint in localStorage '
-      + 'at runtime.',
+    body: 'No feed endpoint is set.\n\nSet `endpoint` in app.json (keeping its origin in the whitelist) and rebuild — or store g2hermes.endpoint in localStorage at runtime.',
   }],
-}
-
-/**
- * Read the bundled config.toml (public/config.toml -> dist/config.toml) and pull
- * out the `endpoint` value. Deliberately a tiny line-parser, not a TOML
- * dependency: the file has exactly one meaningful key, and anything it cannot
- * parse is treated as "not configured" rather than a crash. Cached after the
- * first read; a failure once means failure for the session, which is correct —
- * the bundled file cannot change at runtime.
- */
-let configCache: string | null | undefined
-async function configEndpoint(): Promise<string> {
-  if (configCache !== undefined) return configCache ?? ''
-  try {
-    const res = await fetch(CONFIG_TOML, { cache: 'no-store' })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const text = await res.text()
-    const m = text.match(/^\s*endpoint\s*=\s*["']([^"']*)["']/m)
-    const url = (m?.[1] ?? '').trim()
-    configCache = /^https?:\/\//i.test(url) ? url : null
-  } catch {
-    configCache = null
-  }
-  return configCache ?? ''
 }
 
 /** Read a value the WebView persisted. localStorage survives backgrounding and lock. */
@@ -104,7 +78,7 @@ function stored(key: string): string {
 
 type Source = { url: string; init?: RequestInit }
 
-async function feedSources(): Promise<Source[]> {
+function feedSources(): Source[] {
   const out: Source[] = []
   const q = new URLSearchParams(location.search).get('feed')
   if (q && /^https?:\/\//i.test(q)) out.push({ url: q, init: withAuth() })
@@ -112,9 +86,9 @@ async function feedSources(): Promise<Source[]> {
   const runtime = stored(STORE_ENDPOINT)
   if (runtime) out.push({ url: runtime, init: withAuth() })
 
-  const configured = await configEndpoint()
-  if (configured) out.push({ url: configured, init: withAuth() })
-
+  // ENDPOINT is generated from app.json's network.endpoint at build time, so
+  // there is nothing to fetch for it — and, unlike a bundled config file, no way
+  // for this source to fail for reasons of its own.
   if (ENDPOINT) out.push({ url: ENDPOINT, init: withAuth() })
 
   // A packager may ship a snapshot alongside the app; useful only as a last resort.
@@ -225,7 +199,7 @@ function render(): void {
 }
 
 async function loadFeed(reason: string): Promise<void> {
-  for (const source of await feedSources()) {
+  for (const source of feedSources()) {
     try {
       const res = await fetch(source.url, source.init ?? { cache: 'no-store' })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)

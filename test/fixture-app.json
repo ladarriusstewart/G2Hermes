@@ -9,9 +9,9 @@
     {
       "name": "network",
       "desc": "Fetches the notification feed from the endpoint you configure.",
-      "endpoint": "",
+      "endpoint": "https://feed.example.test/feed.json",
       "whitelist": [
-        "https://your-endpoint.example.com"
+        "https://feed.example.test"
       ]
     }
   ],

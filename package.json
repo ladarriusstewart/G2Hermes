@@ -1,9 +1,12 @@
 {
   "name": "g2hermes",
   "private": true,
-  "version": "1.0.0-beta.4",
+  "version": "1.0.0-beta.5",
   "type": "module",
   "scripts": {
+    "gen": "node scripts/gen-endpoint.mjs",
+    "predev": "npm run gen",
+    "prebuild": "npm run gen",
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
@@ -11,7 +14,7 @@
     "simulate": "evenhub-simulator http://localhost:5173",
     "simulate:headless": "evenhub-simulator http://localhost:5173 --automation-port 9898",
     "qr": "evenhub qr --url http://localhost:5173",
-    "verify": "esbuild src/main.ts --bundle --format=esm --target=esnext --alias:@evenrealities/even_hub_sdk=./test/stub-sdk.ts --outfile=test/app.mjs && node test/harness.mjs",
+    "verify": "node scripts/gen-endpoint.mjs --manifest test/fixture-app.json && esbuild src/main.ts --bundle --format=esm --target=esnext --alias:@evenrealities/even_hub_sdk=./test/stub-sdk.ts --outfile=test/app.mjs && node test/harness.mjs",
     "notify": "python3 tools/notify.py",
     "feed:mlb": "python3 tools/feeds/mlb.py",
     "feed:mlb:dry": "python3 tools/feeds/mlb.py --dry-run"
